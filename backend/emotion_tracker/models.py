@@ -233,6 +233,23 @@ class Collaborator(AbstractUser):
         # Calculer et mettre à jour le degré d'émotion pour la semaine
         self.emotion_degree_this_week = self.calculate_emotion_degree_this_week()
 
+        # Déterminer emotion_this_week en fonction de emotion_degree_this_week
+        if self.emotion_degree_this_week is not None:
+            if self.emotion_degree_this_week <= -5:
+                self.emotion_this_week = "Angry"
+            elif self.emotion_degree_this_week <= -2:
+                self.emotion_this_week = "Anxious"
+            elif self.emotion_degree_this_week <= -1:
+                self.emotion_this_week = "Sad"
+            elif self.emotion_degree_this_week == 0:
+                self.emotion_this_week = "Neutral"
+            elif self.emotion_degree_this_week <= 5:
+                self.emotion_this_week = "Happy"
+            else:
+                self.emotion_this_week = "Excited"
+        else:
+            self.emotion_this_week = None
+
         # Calculer et mettre à jour le degré d'émotion pour le mois
         self.emotion_degree_this_month = self.calculate_emotion_degree_this_month()
 
