@@ -253,6 +253,23 @@ class Collaborator(AbstractUser):
         # Calculer et mettre à jour le degré d'émotion pour le mois
         self.emotion_degree_this_month = self.calculate_emotion_degree_this_month()
 
+        # Déterminer emotion_this_month en fonction de emotion_degree_this_month
+        if self.emotion_degree_this_month is not None:
+            if self.emotion_degree_this_month <= -5:
+                self.emotion_this_month = "Angry"
+            elif self.emotion_degree_this_month <= -2:
+                self.emotion_this_month = "Anxious"
+            elif self.emotion_degree_this_month <= -1:
+                self.emotion_this_month = "Sad"
+            elif self.emotion_degree_this_month == 0:
+                self.emotion_this_month = "Neutral"
+            elif self.emotion_degree_this_month <= 5:
+                self.emotion_this_month = "Happy"
+            else:
+                self.emotion_this_month = "Excited"
+        else:
+            self.emotion_this_month = None
+
         if not self.username:
             self.username = self.email
         super().save(*args, **kwargs)
