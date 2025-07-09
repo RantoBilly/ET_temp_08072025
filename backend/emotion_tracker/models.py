@@ -7,7 +7,7 @@ from datetime import datetime
 import uuid
 
 
-class Company(models.Model):
+class Company(models.Model, EmotionTrendMixin):
     """Modèle pour les entreprises"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255, verbose_name="Nom de l'entreprise")
@@ -18,12 +18,161 @@ class Company(models.Model):
         verbose_name = "Entreprise"
         verbose_name_plural = "Entreprises"
         ordering = ['name']
+
+    def calculate_daily_emotion_trend(self):
+        """
+        Calcule les tendances émotionnelles des collaborateurs de l'entreprise pour la journée
+        """
+        today = timezone.now().date()
+        
+        # Récupérer toutes les émotions des collaborateurs de l'entreprise pour aujourd'hui
+        daily_emotions = Emotion.objects.filter(
+            collaborator__company=self,
+            date=today
+        )
+
+        stats = self._calculate_base_emotion_stats(daily_emotions)
+
+        # Calculer le taux de participation pour l'entreprise
+        total_collaborators = self.collaborators.filter(is_active=True).count()
+        if total_collaborators > 0:
+            stats['participation_rate'] = (daily_emotions.values('collaborator').distinct().count() / total_collaborators) * 100
+
+        # Ajouter des statistiques spécifiques à l'entreprise
+        stats['service_breakdown'] = self._calculate_service_breakdown(daily_emotions)
+        stats['cluster_breakdown'] = self._calculate_cluster_breakdown(daily_emotions)
+
+        return stats
+
+    def _calculate_service_breakdown(self, daily_emotions):
+        """Calcule la répartition des émotions par service"""
+        return dict(daily_emotions.values('collaborator__service__service_name')
+                   .annotate(count=Count('id'))
+                   .values_list('collaborator__service__service_name', 'count'))
+
+    def _calculate_cluster_breakdown(self, daily_emotions):
+        """Calcule la répartition des émotions par cluster"""
+        return dict(daily_emotions.values('collaborator__cluster__name')
+                   .annotate(count=Count('id'))
+                   .values_list('collaborator__cluster__name', 'count'))
+
+    def calculate_weekly_emotion_trend(self):
+        """
+        Calcule les tendances émotionnelles hebdomadaires de l'entreprise
+        """
+        start_of_week, end_of_week = self._get_week_date_range()
+        
+        weekly_emotions = Emotion.objects.filter(
+            collaborator__company=self,
+            date__range=[start_of_week, end_of_week]
+        )
+        
+        stats = self._calculate_weekly_base_stats(weekly_emotions)
+        
+        # Calculer le taux de participation hebdomadaire
+        total_collaborators = self.collaborators.filter(is_active=True).count()
+        if total_collaborators > 0:
+            participants = weekly_emotions.values('collaborator').distinct().count()
+            stats['participation_rate'] = (participants / total_collaborators) * 100
+        
+        # Ajouter les breakdowns spécifiques à l'entreprise
+        stats['service_breakdown'] = self._calculate_weekly_service_breakdown(weekly_emotions)
+        stats['cluster_breakdown'] = self._calculate_weekly_cluster_breakdown(weekly_emotions)
+        
+        return stats
+
+    def _calculate_weekly_service_breakdown(self, weekly_emotions):
+        """Répartition hebdomadaire par service"""
+        return dict(
+            weekly_emotions.values('collaborator__service__service_name')
+            .annotate(count=Count('id'))
+            .values_list('collaborator__service__service_name', 'count')
+        )
+    
+    def _calculate_weekly_cluster_breakdown(self, weekly_emotions):
+        """Répartition hebdomadaire par cluster"""
+        return dict(
+            weekly_emotions.values('collaborator__cluster__name')
+            .annotate(count=Count('id'))
+            .values_list('collaborator__cluster__name', 'count')
+        )
+
+    def calculate_monthly_emotion_trend(self):
+        """
+        Calcule les tendances émotionnelles mensuelles de l'entreprise
+        """
+        start_of_month, end_of_month = self._get_month_date_range()
+        
+        monthly_emotions = Emotion.objects.filter(
+            collaborator__company=self,
+            date__range=[start_of_month, end_of_month]
+        )
+        
+        stats = self._calculate_monthly_base_stats(monthly_emotions)
+        
+        # Calculer le taux de participation mensuel
+        total_collaborators = self.collaborators.filter(is_active=True).count()
+        if total_collaborators > 0:
+            participants = monthly_emotions.values('collaborator').distinct().count()
+            stats['participation_rate'] = (participants / total_collaborators) * 100
+        
+        # Ajouter les breakdowns spécifiques à l'entreprise
+        stats['service_breakdown'] = self._calculate_monthly_service_breakdown(monthly_emotions)
+        stats['cluster_breakdown'] = self._calculate_monthly_cluster_breakdown(monthly_emotions)
+        
+        # Ajouter l'analyse des tendances
+        stats['trend_analysis'] = self._analyze_monthly_trends(monthly_emotions)
+        
+        return stats
+
+    def _calculate_monthly_service_breakdown(self, monthly_emotions):
+        """Répartition mensuelle par service"""
+        return dict(
+            monthly_emotions.values('collaborator__service__service_name')
+            .annotate(
+                count=Count('id'),
+                avg_degree=Avg('emotion_degree')
+            )
+            .values_list(
+                'collaborator__service__service_name',
+                'count'
+            )
+        )
+
+    def _calculate_monthly_cluster_breakdown(self, monthly_emotions):
+        """Répartition mensuelle par cluster"""
+        return dict(
+            monthly_emotions.values('collaborator__cluster__name')
+            .annotate(
+                count=Count('id'),
+                avg_degree=Avg('emotion_degree')
+            )
+            .values_list(
+                'collaborator__cluster__name',
+                'count'
+            )
+        )
+
+    def _analyze_monthly_trends(self, monthly_emotions):
+        """Analyse des tendances mensuelles"""
+        return {
+            'dominant_emotion': monthly_emotions.values('emotion_type__emotion_type')
+                .annotate(count=Count('id'))
+                .order_by('-count')
+                .first(),
+            'emotion_progression': list(
+                monthly_emotions.values('date')
+                .annotate(avg_degree=Avg('emotion_degree'))
+                .order_by('date')
+                .values('date', 'avg_degree')
+            )
+        }
     
     def __str__(self):
         return self.name
 
 
-class Cluster(models.Model):
+class Cluster(models.Model, EmotionTrendMixin):
     """Modèle pour les clusters/pôles"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255, verbose_name="Nom du cluster")
@@ -35,12 +184,117 @@ class Cluster(models.Model):
         verbose_name = "Cluster"
         verbose_name_plural = "Clusters"
         ordering = ['name']
+
+    def calculate_daily_emotion_trend(self):
+        """
+        Calcule les tendances émotionnelles des collaborateurs du cluster pour la journée
+        """
+        today = timezone.now().date()
+        
+        # Récupérer toutes les émotions des collaborateurs du cluster pour aujourd'hui
+        daily_emotions = Emotion.objects.filter(
+            collaborator__cluster=self,
+            date=today
+        )
+        
+        stats = self._calculate_base_emotion_stats(daily_emotions)
+        
+        # Calculer le taux de participation pour le cluster
+        total_collaborators = self.collaborators.filter(is_active=True).count()
+        if total_collaborators > 0:
+            stats['participation_rate'] = (daily_emotions.values('collaborator').distinct().count() / total_collaborators) * 100
+        
+        # Ajouter des statistiques spécifiques au cluster
+        stats['service_breakdown'] = self._calculate_service_breakdown(daily_emotions)
+        
+        return stats
+    
+    def _calculate_service_breakdown(self, daily_emotions):
+        """Calcule la répartition des émotions par service dans le cluster"""
+        return dict(daily_emotions.values('collaborator__service__service_name')
+                   .annotate(count=Count('id'))
+                   .values_list('collaborator__service__service_name', 'count'))
+
+    def calculate_weekly_emotion_trend(self):
+        """
+        Calcule les tendances émotionnelles hebdomadaires du cluster
+        """
+        start_of_week, end_of_week = self._get_week_date_range()
+        
+        weekly_emotions = Emotion.objects.filter(
+            collaborator__cluster=self,
+            date__range=[start_of_week, end_of_week]
+        )
+        
+        stats = self._calculate_weekly_base_stats(weekly_emotions)
+        
+        # Calculer le taux de participation hebdomadaire
+        total_collaborators = self.collaborators.filter(is_active=True).count()
+        if total_collaborators > 0:
+            participants = weekly_emotions.values('collaborator').distinct().count()
+            stats['participation_rate'] = (participants / total_collaborators) * 100
+        
+        # Ajouter les breakdowns spécifiques au cluster
+        stats['service_breakdown'] = self._calculate_weekly_service_breakdown(weekly_emotions)
+
+        return stats
+
+
+    def _calculate_weekly_service_breakdown(self, weekly_emotions):
+        """Répartition hebdomadaire par service dans le cluster"""
+        return dict(
+            weekly_emotions.values('collaborator__service__service_name')
+            .annotate(count=Count('id'))
+            .values_list('collaborator__service__service_name', 'count')
+        )
+
+    def calculate_monthly_emotion_trend(self):
+        """
+        Calcule les tendances émotionnelles mensuelles du cluster
+        """
+        start_of_month, end_of_month = self._get_month_date_range()
+        
+        monthly_emotions = Emotion.objects.filter(
+            collaborator__cluster=self,
+            date__range=[start_of_month, end_of_month]
+        )
+        
+        stats = self._calculate_monthly_base_stats(monthly_emotions)
+        
+        # Calculer le taux de participation mensuel
+        total_collaborators = self.collaborators.filter(is_active=True).count()
+        if total_collaborators > 0:
+            participants = monthly_emotions.values('collaborator').distinct().count()
+            stats['participation_rate'] = (participants / total_collaborators) * 100
+        
+        # Ajouter les breakdowns spécifiques au cluster
+        stats['service_breakdown'] = self._calculate_monthly_service_breakdown(monthly_emotions)
+        stats['team_distribution'] = self._calculate_monthly_team_distribution(monthly_emotions)
+        
+        return stats
+
+    def _calculate_monthly_service_breakdown(self, monthly_emotions):
+        """Répartition mensuelle par service"""
+        return dict(
+            monthly_emotions.values('collaborator__service__service_name')
+            .annotate(count=Count('id'))
+            .values_list('collaborator__service__service_name', 'count')
+        )
+    
+    def _calculate_monthly_team_distribution(self, monthly_emotions):
+        """Distribution mensuelle par équipe"""
+        return dict(
+            monthly_emotions.values('collaborator__team__team_name')
+            .annotate(count=Count('id'))
+            .values_list('collaborator__team__team_name', 'count')
+        )
+        
     
     def __str__(self):
         return f"{self.name} - {self.company.name}"
 
 
-class Service(models.Model):
+class Service(models.Model, EmotionTrendMixin):
     """Modèle pour les services/départements"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     service_name = models.CharField(max_length=255, verbose_name="Nom du service")
@@ -53,12 +307,179 @@ class Service(models.Model):
         verbose_name = "Service"
         verbose_name_plural = "Services"
         ordering = ['service_name']
+
+    def calculate_daily_emotion_trend(self):
+        """
+        Calcule les tendances émotionnelles des collaborateurs du service pour la journée
+        Retourne un dictionnaire contenant les statistiques émotionnelles
+        """
+        today = timezone.now().date()
+
+        # Récupérer toutes les émotions des collaborateurs du service pour aujourd'hui
+        daily_emotions = Emotion.objects.filter(
+        collaborator__service=self,
+        date=today
+        )
+
+        # Statistiques de base
+        stats = {
+            'total_emotions': daily_emotions.count(),
+            'morning_emotions': daily_emotions.filter(half_day=False).count(),
+            'evening_emotions': daily_emotions.filter(half_day=True).count(),
+            'participation_rate': 0,
+            'emotion_distribution': {},
+            'average_emotion_degree': 0,
+            'emotion_trends': {
+                'morning': {},
+                'evening': {}
+            }
+        }
+
+        # Calculer le taux de participation
+        total_collaborators = self.collaborators.filter(is_active=True).count()
+        if total_collaborators > 0:
+            stats['participation_rate'] = (daily_emotions.values('collaborator').distinct().count() / total_collaborators) * 100
+        
+        # Distribution des émotions
+        emotion_counts = daily_emotions.values('emotion_type__emotion_type').annotate(
+            count=Count('emotion_type__emotion_type')
+        )   
+        for emotion in emotion_counts:
+            stats['emotion_distribution'][emotion['emotion_type__emotion_type']] = emotion['count']
+
+        # Moyenne des degrés d'émotion
+        avg_degree = daily_emotions.aggregate(Avg('emotion_degree'))['emotion_degree__avg']
+        stats['average_emotion_degree'] = round(avg_degree if avg_degree else 0, 2)
+
+        # Tendances par période (matin/soir)
+        for period, half_day in [('morning', False), ('evening', True)]:
+            period_emotions = daily_emotions.filter(half_day=half_day)
+            emotion_trend = period_emotions.values('emotion_type__emotion_type').annotate(
+                count=Count('emotion_type__emotion_type')
+            )
+
+            for emotion in emotion_trend:
+                stats['emotion_trends'][period][emotion['emotion_type__emotion_type']] = emotion['count']
+
+        return stats
+
+    def get_dominant_emotion(self):
+        """
+        Retourne l'émotion dominante du service pour la journée
+        """
+        today = timezone.now().date()
+
+        dominant_emotion = Emotion.objects.filter(
+            collaborator__service=self,
+            date=today
+        ).values('emotion_type__emotion_type').annotate(
+            count=Count('emotion_type__emotion_type')
+        ).order_by('-count').first()
+
+        return dominant_emotion['emotion_type__emotion_type'] if dominant_emotion else None
+
+    def get_emotion_alerts(self):
+        """
+        Retourne les alertes émotionnelles du service pour la journée
+        """
+
+        today = timezone.now().date()
+        stats = self.calculate_daily_emotion_trend()
+
+        # Alerte si le taux de participation est faible (<50%)
+        if stats['participation_rate'] < 50:
+            alerts.append({
+                'type': 'low_participation',
+                'message': f"Faible taux de participation ({stats['participation_rate']}%) dans le service {self.service_name}"
+            })
+
+        # Alerte si la moyenne des émotions est négative
+        if stats['average_emotion_degree'] < 0:
+            alerts.append({
+                'type': 'negative_emotions',
+                'message': f"Tendance émotionnelle négative dans le service {self.service_name}"
+            })
+
+        return alerts
+
+    def calculate_weekly_emotion_trend(self):
+        """
+        Calcule les tendances émotionnelles hebdomadaires du service
+        """
+        start_of_week, end_of_week = self._get_week_date_range()
+        
+        weekly_emotions = Emotion.objects.filter(
+            collaborator__service=self,
+            date__range=[start_of_week, end_of_week]
+        )
+        
+        stats = self._calculate_weekly_base_stats(weekly_emotions)
+        
+        # Calculer le taux de participation hebdomadaire
+        total_collaborators = self.collaborators.filter(is_active=True).count()
+        if total_collaborators > 0:
+            participants = weekly_emotions.values('collaborator').distinct().count()
+            stats['participation_rate'] = (participants / total_collaborators) * 100
+        
+        # Ajouter les breakdowns spécifiques au service
+        stats['team_breakdown'] = self._calculate_weekly_team_breakdown(weekly_emotions)
+        
+        return stats
+
+    def _calculate_weekly_team_breakdown(self, weekly_emotions):
+        """Répartition hebdomadaire par équipe"""
+        return dict(
+            weekly_emotions.values('collaborator__team__team_name')
+            .annotate(count=Count('id'))
+            .values_list('collaborator__team__team_name', 'count')
+        )
+
+    def calculate_monthly_emotion_trend(self):
+        """
+        Calcule les tendances émotionnelles mensuelles du service
+        """
+        start_of_month, end_of_month = self._get_month_date_range()
+        
+        monthly_emotions = Emotion.objects.filter(
+            collaborator__service=self,
+            date__range=[start_of_month, end_of_month]
+        )
+        
+        stats = self._calculate_monthly_base_stats(monthly_emotions)
+        
+        # Calculer le taux de participation mensuel
+        total_collaborators = self.collaborators.filter(is_active=True).count()
+        if total_collaborators > 0:
+            participants = monthly_emotions.values('collaborator').distinct().count()
+            stats['participation_rate'] = (participants / total_collaborators) * 100
+        
+        # Ajouter les breakdowns spécifiques au service
+        stats['team_breakdown'] = self._calculate_monthly_team_breakdown(monthly_emotions)
+        stats['role_distribution'] = self._calculate_monthly_role_distribution(monthly_emotions)
+        
+        return stats
+
+    def _calculate_monthly_team_breakdown(self, monthly_emotions):
+        """Répartition mensuelle par équipe"""
+        return dict(
+            monthly_emotions.values('collaborator__team__team_name')
+            .annotate(count=Count('id'))
+            .values_list('collaborator__team__team_name', 'count')
+        )
+    
+    def _calculate_monthly_role_distribution(self, monthly_emotions):
+        """Distribution mensuelle par rôle"""
+        return dict(
+            monthly_emotions.values('collaborator__role')
+            .annotate(count=Count('id'))
+            .values_list('collaborator__role', 'count')
+        )
     
     def __str__(self):
         return self.service_name
 
 
-class Team(models.Model):
+class Team(models.Model, EmotionTrendMixin):
     """Modèle pour les équipes"""
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     team_name = models.CharField(max_length=255, verbose_name="Nom de l'équipe")
@@ -71,6 +492,116 @@ class Team(models.Model):
         verbose_name = "Équipe"
         verbose_name_plural = "Équipes"
         ordering = ['team_name']
+
+    def calculate_daily_emotion_trend(self):
+        """
+        Calcule les tendances émotionnelles des collaborateurs de l'équipe pour la journée
+        """
+        today = timezone.now().date()
+        
+        # Récupérer toutes les émotions des collaborateurs de l'équipe pour aujourd'hui
+        daily_emotions = Emotion.objects.filter(
+            collaborator__team=self,
+            date=today
+        )
+        
+        stats = self._calculate_base_emotion_stats(daily_emotions)
+        
+        # Calculer le taux de participation pour l'équipe
+        total_collaborators = self.collaborators.filter(is_active=True).count()
+        if total_collaborators > 0:
+            stats['participation_rate'] = (daily_emotions.values('collaborator').distinct().count() / total_collaborators) * 100
+        
+        # Ajouter des statistiques spécifiques à l'équipe
+        stats['role_breakdown'] = self._calculate_role_breakdown(daily_emotions)
+        
+        return stats
+    
+    def _calculate_role_breakdown(self, daily_emotions):
+        """Calcule la répartition des émotions par rôle dans l'équipe"""
+        return dict(daily_emotions.values('collaborator__role')
+                   .annotate(count=Count('id'))
+                   .values_list('collaborator__role', 'count'))
+
+    def calculate_weekly_emotion_trend(self):
+        """
+        Calcule les tendances émotionnelles hebdomadaires de l'équipe
+        """
+        start_of_week, end_of_week = self._get_week_date_range()
+        
+        weekly_emotions = Emotion.objects.filter(
+            collaborator__team=self,
+            date__range=[start_of_week, end_of_week]
+        )
+        
+        stats = self._calculate_weekly_base_stats(weekly_emotions)
+        
+        # Calculer le taux de participation hebdomadaire
+        total_collaborators = self.collaborators.filter(is_active=True).count()
+        if total_collaborators > 0:
+            participants = weekly_emotions.values('collaborator').distinct().count()
+            stats['participation_rate'] = (participants / total_collaborators) * 100
+        
+        # Ajouter les breakdowns spécifiques à l'équipe
+        stats['role_breakdown'] = self._calculate_weekly_role_breakdown(weekly_emotions)
+        
+        return stats
+
+    def _calculate_weekly_role_breakdown(self, weekly_emotions):
+        """Répartition hebdomadaire par rôle"""
+        return dict(
+            weekly_emotions.values('collaborator__role')
+            .annotate(count=Count('id'))
+            .values_list('collaborator__role', 'count')
+        )
+
+    def calculate_monthly_emotion_trend(self):
+        """
+        Calcule les tendances émotionnelles mensuelles de l'équipe
+        """
+        start_of_month, end_of_month = self._get_month_date_range()
+        
+        monthly_emotions = Emotion.objects.filter(
+            collaborator__team=self,
+            date__range=[start_of_month, end_of_month]
+        )
+        
+        stats = self._calculate_monthly_base_stats(monthly_emotions)
+        
+        # Calculer le taux de participation mensuel
+        total_collaborators = self.collaborators.filter(is_active=True).count()
+        if total_collaborators > 0:
+            participants = monthly_emotions.values('collaborator').distinct().count()
+            stats['participation_rate'] = (participants / total_collaborators) * 100
+        
+        # Ajouter les breakdowns spécifiques à l'équipe
+        stats['role_breakdown'] = self._calculate_monthly_role_breakdown(monthly_emotions)
+        stats['member_participation'] = self._calculate_member_participation(monthly_emotions)
+        
+        return stats
+
+    def _calculate_monthly_role_breakdown(self, monthly_emotions):
+        """Répartition mensuelle par rôle"""
+        return dict(
+            monthly_emotions.values('collaborator__role')
+            .annotate(count=Count('id'))
+            .values_list('collaborator__role', 'count')
+        )
+    
+    def _calculate_member_participation(self, monthly_emotions):
+        """Calcul de la participation par membre"""
+        return dict(
+            monthly_emotions.values('collaborator__full_name')
+            .annotate(
+                emotion_count=Count('id'),
+                avg_emotion=Avg('emotion_degree')
+            )
+            .values(
+                'collaborator__full_name',
+                'emotion_count',
+                'avg_emotion'
+            )
+        )
     
     def __str__(self):
         return self.team_name
@@ -531,108 +1062,204 @@ class Emotion(models.Model):
     def __str__(self):
         return f"{self.collaborator.full_name} - {self.emotion_type.name} - {self.date} ({self.period})"
 
+class EmotionTrendMixin:
+    """Mixin pour calculer les tendances émotionnelles"""
 
-class EmotionTrend(models.Model):
-    """Modèle pour les tendances émotionnelles"""
-    TREND_PERIOD_CHOICES = [
-        ('weekly', 'Hebdomadaire'),
-        ('monthly', 'Mensuel'),
-        ('quarterly', 'Trimestriel'),
-    ]
-    
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
-    # Relations
-    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='emotion_trends', null=True, blank=True)
-    service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='emotion_trends', null=True, blank=True)
-    
-    # Données de tendance
-    weekly_emotion_trend = models.JSONField(default=dict, verbose_name="Tendance émotionnelle hebdomadaire")
-    monthly_emotion_summary = models.JSONField(default=dict, verbose_name="Résumé émotionnel mensuel")
-    
-    # Période et métadonnées
-    period_type = models.CharField(max_length=20, choices=TREND_PERIOD_CHOICES, verbose_name="Type de période")
-    start_date = models.DateField(verbose_name="Date de début")
-    end_date = models.DateField(verbose_name="Date de fin")
-    
-    # Données calculées
-    average_emotion_score = models.FloatField(null=True, blank=True, verbose_name="Score émotionnel moyen")
-    dominant_emotion = models.CharField(max_length=100, blank=True, verbose_name="Émotion dominante")
-    participation_rate = models.FloatField(null=True, blank=True, verbose_name="Taux de participation")
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
-    class Meta:
-        verbose_name = "Tendance émotionnelle"
-        verbose_name_plural = "Tendances émotionnelles"
-        ordering = ['-start_date']
-        unique_together = ['team', 'service', 'period_type', 'start_date']
-    
-    def __str__(self):
-        entity = self.team.team_name if self.team else self.service.service_name if self.service else "Global"
-        return f"Tendance {self.period_type} - {entity} - {self.start_date}"
+    def _calculate_base_emotion_stats(self, daily_emotions):
+        """
+        Calcule les statistiques de base pour un QuerySet d'émotions
+        """
+        stats = {
+            'total_emotions': daily_emotions.count(),
+            'morning_emotions': daily_emotions.filter(half_day=False).count(),
+            'evening_emotions': daily_emotions.filter(half_day=True).count(),
+            'participation_rate': 0,
+            'emotion_distribution': {},
+            'average_emotion_degree': 0,
+            'emotion_trends': {
+                'morning': {},
+                'evening': {}
+            }
+        }
 
+        # Distribution des émotions
+        emotion_counts = daily_emotions.values('emotion_type__emotion_type').annotate(
+            count=Count('emotion_type__emotion_type')
+        )
+        for emotion in emotion_counts:
+            stats['emotion_distribution'][emotion['emotion_type__emotion_type']] = emotion['count']
 
-class Alert(models.Model):
-    """Modèle pour les alertes et notifications"""
-    ALERT_TYPE_CHOICES = [
-        ('consecutive_negative', 'Émotions négatives consécutives'),
-        ('low_team_morale', 'Moral d\'équipe faible'),
-        ('high_stress_level', 'Niveau de stress élevé'),
-        ('low_participation', 'Faible participation'),
-        ('significant_change', 'Changement significatif'),
-    ]
-    
-    SEVERITY_CHOICES = [
-        ('low', 'Faible'),
-        ('medium', 'Moyen'),
-        ('high', 'Élevé'),
-        ('critical', 'Critique'),
-    ]
-    
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
-    # Relations
-    collaborator = models.ForeignKey(Collaborator, on_delete=models.CASCADE, related_name='alerts', null=True, blank=True)
-    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name='alerts', null=True, blank=True)
-    service = models.ForeignKey(Service, on_delete=models.CASCADE, related_name='alerts', null=True, blank=True)
-    
-    # Informations de l'alerte
-    alert_type = models.CharField(max_length=50, choices=ALERT_TYPE_CHOICES, verbose_name="Type d'alerte")
-    severity = models.CharField(max_length=20, choices=SEVERITY_CHOICES, default='medium', verbose_name="Sévérité")
-    title = models.CharField(max_length=255, verbose_name="Titre")
-    message = models.TextField(verbose_name="Message")
-    
-    # Métadonnées
-    is_resolved = models.BooleanField(default=False, verbose_name="Résolu")
-    resolved_by = models.ForeignKey(Collaborator, on_delete=models.SET_NULL, null=True, blank=True, related_name='resolved_alerts')
-    resolved_at = models.DateTimeField(null=True, blank=True, verbose_name="Résolu le")
-    resolution_notes = models.TextField(blank=True, verbose_name="Notes de résolution")
-    
-    # Données contextuelles
-    trigger_data = models.JSONField(default=dict, verbose_name="Données déclencheur")
-    notification_sent = models.BooleanField(default=False, verbose_name="Notification envoyée")
-    
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-    
-    class Meta:
-        verbose_name = "Alerte"
-        verbose_name_plural = "Alertes"
-        ordering = ['-created_at']
-        indexes = [
-            models.Index(fields=['alert_type', 'is_resolved']),
-            models.Index(fields=['severity', 'created_at']),
+        # Moyenne des degrés d'émotion
+        avg_degree = daily_emotions.aggregate(Avg('emotion_degree'))['emotion_degree__avg']
+        stats['average_emotion_degree'] = round(avg_degree if avg_degree else 0, 2)
+
+        # Tendances par période (matin/soir)
+        for period, half_day in [('morning', False), ('evening', True)]:
+            period_emotions = daily_emotions.filter(half_day=half_day)
+            emotion_trend = period_emotions.values('emotion_type__emotion_type').annotate(
+                count=Count('emotion_type__emotion_type')
+            )
+            
+            for emotion in emotion_trend:
+                stats['emotion_trends'][period][emotion['emotion_type__emotion_type']] = emotion['count']
+        
+        return stats
+
+    def _get_week_date_range(self):
+        """Retourne le début et la fin de la semaine en cours"""
+        today = timezone.now().date()
+        start_of_week = today - timezone.timedelta(days=today.weekday())
+        end_of_week = start_of_week + timezone.timedelta(days=6)
+        return start_of_week, end_of_week
+
+    def _calculate_weekly_base_stats(self, weekly_emotions):
+        """
+        Calcule les statistiques de base pour la semaine
+        """
+        stats = {
+            'total_emotions': weekly_emotions.count(),
+            'daily_breakdown': {},
+            'emotion_distribution': {},
+            'average_emotion_degree': 0,
+            'participation_rate': 0,
+            'daily_trends': {},
+            'emotion_evolution': []
+        }
+        
+        # Distribution par jour
+        start_of_week, end_of_week = self._get_week_date_range()
+        current_date = start_of_week
+        
+        while current_date <= end_of_week:
+            day_emotions = weekly_emotions.filter(date=current_date)
+            
+            stats['daily_breakdown'][current_date.strftime('%Y-%m-%d')] = {
+                'count': day_emotions.count(),
+                'average_degree': day_emotions.aggregate(Avg('emotion_degree'))['emotion_degree__avg'] or 0
+            }
+            
+            # Tendances par jour
+            day_emotion_counts = day_emotions.values('emotion_type__emotion_type').annotate(
+                count=Count('emotion_type__emotion_type')
+            )
+            
+            stats['daily_trends'][current_date.strftime('%Y-%m-%d')] = {
+                emotion['emotion_type__emotion_type']: emotion['count']
+                for emotion in day_emotion_counts
+            }
+            
+            current_date += timezone.timedelta(days=1)
+        
+        # Distribution globale des émotions
+        emotion_counts = weekly_emotions.values('emotion_type__emotion_type').annotate(
+            count=Count('emotion_type__emotion_type')
+        )
+        stats['emotion_distribution'] = {
+            emotion['emotion_type__emotion_type']: emotion['count']
+            for emotion in emotion_counts
+        }
+        
+        # Moyenne globale
+        avg_degree = weekly_emotions.aggregate(Avg('emotion_degree'))['emotion_degree__avg']
+        stats['average_emotion_degree'] = round(avg_degree if avg_degree else 0, 2)
+        
+        # Évolution des émotions
+        daily_averages = weekly_emotions.values('date').annotate(
+            avg_degree=Avg('emotion_degree')
+        ).order_by('date')
+        
+        stats['emotion_evolution'] = [
+            {
+                'date': entry['date'].strftime('%Y-%m-%d'),
+                'average_degree': round(entry['avg_degree'] if entry['avg_degree'] else 0, 2)
+            }
+            for entry in daily_averages
         ]
-    
-    def resolve(self, resolved_by, notes=""):
-        """Marquer l'alerte comme résolue"""
-        self.is_resolved = True
-        self.resolved_by = resolved_by
-        self.resolved_at = timezone.now()
-        self.resolution_notes = notes
-        self.save()
-    
-    def __str__(self):
-        return f"{self.title} - {self.get_severity_display()} - {self.created_at.strftime('%d/%m/%Y')}"
+        
+        return stats
+
+    def _get_month_date_range(self):
+        """Retourne le début et la fin du mois en cours"""
+        today = timezone.now().date()
+        start_of_month = today.replace(day=1)
+        next_month = start_of_month + timezone.timedelta(days=32)
+        end_of_month = next_month.replace(day=1) - timezone.timedelta(days=1)
+        return start_of_month, end_of_month
+
+    def _calculate_monthly_base_stats(self, monthly_emotions):
+        """
+        Calcule les statistiques de base pour le mois
+        """
+        stats = {
+            'total_emotions': monthly_emotions.count(),
+            'weekly_breakdown': {},
+            'emotion_distribution': {},
+            'average_emotion_degree': 0,
+            'participation_rate': 0,
+            'weekly_trends': {},
+            'emotion_evolution': [],
+            'peak_days': {
+                'highest': None,
+                'lowest': None
+            }
+        }
+        
+        # Distribution par semaine
+        weekly_stats = monthly_emotions.annotate(
+            week=ExtractWeek('date')
+        ).values('week').annotate(
+            count=Count('id'),
+            avg_degree=Avg('emotion_degree')
+        ).order_by('week')
+        
+        for week_stat in weekly_stats:
+            stats['weekly_breakdown'][f"Week-{week_stat['week']}"] = {
+                'count': week_stat['count'],
+                'average_degree': round(week_stat['avg_degree'] if week_stat['avg_degree'] else 0, 2)
+            }
+        
+        # Distribution globale des émotions
+        emotion_counts = monthly_emotions.values('emotion_type__emotion_type').annotate(
+            count=Count('emotion_type__emotion_type')
+        )
+        stats['emotion_distribution'] = {
+            emotion['emotion_type__emotion_type']: emotion['count']
+            for emotion in emotion_counts
+        }
+        
+        # Moyenne globale
+        avg_degree = monthly_emotions.aggregate(Avg('emotion_degree'))['emotion_degree__avg']
+        stats['average_emotion_degree'] = round(avg_degree if avg_degree else 0, 2)
+        
+        # Évolution quotidienne des émotions
+        daily_stats = monthly_emotions.values('date').annotate(
+            count=Count('id'),
+            avg_degree=Avg('emotion_degree')
+        ).order_by('date')
+        
+        stats['emotion_evolution'] = [
+            {
+                'date': entry['date'].strftime('%Y-%m-%d'),
+                'count': entry['count'],
+                'average_degree': round(entry['avg_degree'] if entry['avg_degree'] else 0, 2)
+            }
+            for entry in daily_stats
+        ]
+        
+        # Identifier les pics
+        if daily_stats:
+            highest = max(daily_stats, key=lambda x: x['avg_degree'] or 0)
+            lowest = min(daily_stats, key=lambda x: x['avg_degree'] or 0)
+            
+            stats['peak_days'] = {
+                'highest': {
+                    'date': highest['date'].strftime('%Y-%m-%d'),
+                    'degree': round(highest['avg_degree'] if highest['avg_degree'] else 0, 2)
+                },
+                'lowest': {
+                    'date': lowest['date'].strftime('%Y-%m-%d'),
+                    'degree': round(lowest['avg_degree'] if lowest['avg_degree'] else 0, 2)
+                }
+            }
+        
+        return stats
