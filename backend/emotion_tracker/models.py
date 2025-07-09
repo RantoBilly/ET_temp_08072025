@@ -1,10 +1,213 @@
 from django.db import models
 from django.db.models import Avg, Count, Sum
+from django.db.models.functions import ExtractWeek
 from django.contrib.auth.models import AbstractUser
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.utils import timezone
 from datetime import datetime
 import uuid
+
+class EmotionTrendMixin:
+    """Mixin pour calculer les tendances émotionnelles"""
+
+    def _calculate_base_emotion_stats(self, daily_emotions):
+        """
+        Calcule les statistiques de base pour un QuerySet d'émotions
+        """
+        stats = {
+            'total_emotions': daily_emotions.count(),
+            'morning_emotions': daily_emotions.filter(half_day=False).count(),
+            'evening_emotions': daily_emotions.filter(half_day=True).count(),
+            'participation_rate': 0,
+            'emotion_distribution': {},
+            'average_emotion_degree': 0,
+            'emotion_trends': {
+                'morning': {},
+                'evening': {}
+            }
+        }
+
+        # Distribution des émotions
+        emotion_counts = daily_emotions.values('emotion_type__emotion_type').annotate(
+            count=Count('emotion_type__emotion_type')
+        )
+        for emotion in emotion_counts:
+            stats['emotion_distribution'][emotion['emotion_type__emotion_type']] = emotion['count']
+
+        # Moyenne des degrés d'émotion
+        avg_degree = daily_emotions.aggregate(Avg('emotion_degree'))['emotion_degree__avg']
+        stats['average_emotion_degree'] = round(avg_degree if avg_degree else 0, 2)
+
+        # Tendances par période (matin/soir)
+        for period, half_day in [('morning', False), ('evening', True)]:
+            period_emotions = daily_emotions.filter(half_day=half_day)
+            emotion_trend = period_emotions.values('emotion_type__emotion_type').annotate(
+                count=Count('emotion_type__emotion_type')
+            )
+            
+            for emotion in emotion_trend:
+                stats['emotion_trends'][period][emotion['emotion_type__emotion_type']] = emotion['count']
+        
+        return stats
+
+    def _get_week_date_range(self):
+        """Retourne le début et la fin de la semaine en cours"""
+        today = timezone.now().date()
+        start_of_week = today - timezone.timedelta(days=today.weekday())
+        end_of_week = start_of_week + timezone.timedelta(days=6)
+        return start_of_week, end_of_week
+
+    def _calculate_weekly_base_stats(self, weekly_emotions):
+        """
+        Calcule les statistiques de base pour la semaine
+        """
+        stats = {
+            'total_emotions': weekly_emotions.count(),
+            'daily_breakdown': {},
+            'emotion_distribution': {},
+            'average_emotion_degree': 0,
+            'participation_rate': 0,
+            'daily_trends': {},
+            'emotion_evolution': []
+        }
+        
+        # Distribution par jour
+        start_of_week, end_of_week = self._get_week_date_range()
+        current_date = start_of_week
+        
+        while current_date <= end_of_week:
+            day_emotions = weekly_emotions.filter(date=current_date)
+            
+            stats['daily_breakdown'][current_date.strftime('%Y-%m-%d')] = {
+                'count': day_emotions.count(),
+                'average_degree': day_emotions.aggregate(Avg('emotion_degree'))['emotion_degree__avg'] or 0
+            }
+            
+            # Tendances par jour
+            day_emotion_counts = day_emotions.values('emotion_type__emotion_type').annotate(
+                count=Count('emotion_type__emotion_type')
+            )
+            
+            stats['daily_trends'][current_date.strftime('%Y-%m-%d')] = {
+                emotion['emotion_type__emotion_type']: emotion['count']
+                for emotion in day_emotion_counts
+            }
+            
+            current_date += timezone.timedelta(days=1)
+        
+        # Distribution globale des émotions
+        emotion_counts = weekly_emotions.values('emotion_type__emotion_type').annotate(
+            count=Count('emotion_type__emotion_type')
+        )
+        stats['emotion_distribution'] = {
+            emotion['emotion_type__emotion_type']: emotion['count']
+            for emotion in emotion_counts
+        }
+        
+        # Moyenne globale
+        avg_degree = weekly_emotions.aggregate(Avg('emotion_degree'))['emotion_degree__avg']
+        stats['average_emotion_degree'] = round(avg_degree if avg_degree else 0, 2)
+        
+        # Évolution des émotions
+        daily_averages = weekly_emotions.values('date').annotate(
+            avg_degree=Avg('emotion_degree')
+        ).order_by('date')
+        
+        stats['emotion_evolution'] = [
+            {
+                'date': entry['date'].strftime('%Y-%m-%d'),
+                'average_degree': round(entry['avg_degree'] if entry['avg_degree'] else 0, 2)
+            }
+            for entry in daily_averages
+        ]
+        
+        return stats
+
+    def _get_month_date_range(self):
+        """Retourne le début et la fin du mois en cours"""
+        today = timezone.now().date()
+        start_of_month = today.replace(day=1)
+        next_month = start_of_month + timezone.timedelta(days=32)
+        end_of_month = next_month.replace(day=1) - timezone.timedelta(days=1)
+        return start_of_month, end_of_month
+
+    def _calculate_monthly_base_stats(self, monthly_emotions):
+        """
+        Calcule les statistiques de base pour le mois
+        """
+        stats = {
+            'total_emotions': monthly_emotions.count(),
+            'weekly_breakdown': {},
+            'emotion_distribution': {},
+            'average_emotion_degree': 0,
+            'participation_rate': 0,
+            'weekly_trends': {},
+            'emotion_evolution': [],
+            'peak_days': {
+                'highest': None,
+                'lowest': None
+            }
+        }
+        
+        # Distribution par semaine
+        weekly_stats = monthly_emotions.annotate(
+            week=ExtractWeek('date')
+        ).values('week').annotate(
+            count=Count('id'),
+            avg_degree=Avg('emotion_degree')
+        ).order_by('week')
+        
+        for week_stat in weekly_stats:
+            stats['weekly_breakdown'][f"Week-{week_stat['week']}"] = {
+                'count': week_stat['count'],
+                'average_degree': round(week_stat['avg_degree'] if week_stat['avg_degree'] else 0, 2)
+            }
+        
+        # Distribution globale des émotions
+        emotion_counts = monthly_emotions.values('emotion_type__emotion_type').annotate(
+            count=Count('emotion_type__emotion_type')
+        )
+        stats['emotion_distribution'] = {
+            emotion['emotion_type__emotion_type']: emotion['count']
+            for emotion in emotion_counts
+        }
+        
+        # Moyenne globale
+        avg_degree = monthly_emotions.aggregate(Avg('emotion_degree'))['emotion_degree__avg']
+        stats['average_emotion_degree'] = round(avg_degree if avg_degree else 0, 2)
+        
+        # Évolution quotidienne des émotions
+        daily_stats = monthly_emotions.values('date').annotate(
+            count=Count('id'),
+            avg_degree=Avg('emotion_degree')
+        ).order_by('date')
+        
+        stats['emotion_evolution'] = [
+            {
+                'date': entry['date'].strftime('%Y-%m-%d'),
+                'count': entry['count'],
+                'average_degree': round(entry['avg_degree'] if entry['avg_degree'] else 0, 2)
+            }
+            for entry in daily_stats
+        ]
+        
+        # Identifier les pics
+        if daily_stats:
+            highest = max(daily_stats, key=lambda x: x['avg_degree'] or 0)
+            lowest = min(daily_stats, key=lambda x: x['avg_degree'] or 0)
+            
+            stats['peak_days'] = {
+                'highest': {
+                    'date': highest['date'].strftime('%Y-%m-%d'),
+                    'degree': round(highest['avg_degree'] if highest['avg_degree'] else 0, 2)
+                },
+                'lowest': {
+                    'date': lowest['date'].strftime('%Y-%m-%d'),
+                    'degree': round(lowest['avg_degree'] if lowest['avg_degree'] else 0, 2)
+                }
+            }
+        
+        return stats
 
 
 class Company(models.Model, EmotionTrendMixin):
@@ -383,6 +586,8 @@ class Service(models.Model, EmotionTrendMixin):
         Retourne les alertes émotionnelles du service pour la journée
         """
 
+        alerts = []
+
         today = timezone.now().date()
         stats = self.calculate_daily_emotion_trend()
 
@@ -685,7 +890,7 @@ class Collaborator(AbstractUser):
 
         try:
             # Filtrer les émotions pour aujourd'hui, le matin
-            today_morning_emotion = Emotion.objects.filter(
+            today_evening_emotion = Emotion.objects.filter(
                 collaborator=self,  # Lié au collaborateur actuel
                 date=today,         # Date d'aujourd'hui
                 date_period="Ce jour",  # Période du jour
@@ -839,7 +1044,7 @@ class EmotionType(models.Model):
         }
 
         # Utiliser le type d'émotion pour déterminer le degree
-        self.degree = emotion_degree_mapping.get(self.emotion_type, 0)  # 0 par défaut si non trouvé
+        self.degree = emotion_degree_mapping.get(self.emotion, 0)  # 0 par défaut si non trouvé
 
         super().save(*args, **kwargs)
     
@@ -1062,204 +1267,3 @@ class Emotion(models.Model):
     def __str__(self):
         return f"{self.collaborator.full_name} - {self.emotion_type.name} - {self.date} ({self.period})"
 
-class EmotionTrendMixin:
-    """Mixin pour calculer les tendances émotionnelles"""
-
-    def _calculate_base_emotion_stats(self, daily_emotions):
-        """
-        Calcule les statistiques de base pour un QuerySet d'émotions
-        """
-        stats = {
-            'total_emotions': daily_emotions.count(),
-            'morning_emotions': daily_emotions.filter(half_day=False).count(),
-            'evening_emotions': daily_emotions.filter(half_day=True).count(),
-            'participation_rate': 0,
-            'emotion_distribution': {},
-            'average_emotion_degree': 0,
-            'emotion_trends': {
-                'morning': {},
-                'evening': {}
-            }
-        }
-
-        # Distribution des émotions
-        emotion_counts = daily_emotions.values('emotion_type__emotion_type').annotate(
-            count=Count('emotion_type__emotion_type')
-        )
-        for emotion in emotion_counts:
-            stats['emotion_distribution'][emotion['emotion_type__emotion_type']] = emotion['count']
-
-        # Moyenne des degrés d'émotion
-        avg_degree = daily_emotions.aggregate(Avg('emotion_degree'))['emotion_degree__avg']
-        stats['average_emotion_degree'] = round(avg_degree if avg_degree else 0, 2)
-
-        # Tendances par période (matin/soir)
-        for period, half_day in [('morning', False), ('evening', True)]:
-            period_emotions = daily_emotions.filter(half_day=half_day)
-            emotion_trend = period_emotions.values('emotion_type__emotion_type').annotate(
-                count=Count('emotion_type__emotion_type')
-            )
-            
-            for emotion in emotion_trend:
-                stats['emotion_trends'][period][emotion['emotion_type__emotion_type']] = emotion['count']
-        
-        return stats
-
-    def _get_week_date_range(self):
-        """Retourne le début et la fin de la semaine en cours"""
-        today = timezone.now().date()
-        start_of_week = today - timezone.timedelta(days=today.weekday())
-        end_of_week = start_of_week + timezone.timedelta(days=6)
-        return start_of_week, end_of_week
-
-    def _calculate_weekly_base_stats(self, weekly_emotions):
-        """
-        Calcule les statistiques de base pour la semaine
-        """
-        stats = {
-            'total_emotions': weekly_emotions.count(),
-            'daily_breakdown': {},
-            'emotion_distribution': {},
-            'average_emotion_degree': 0,
-            'participation_rate': 0,
-            'daily_trends': {},
-            'emotion_evolution': []
-        }
-        
-        # Distribution par jour
-        start_of_week, end_of_week = self._get_week_date_range()
-        current_date = start_of_week
-        
-        while current_date <= end_of_week:
-            day_emotions = weekly_emotions.filter(date=current_date)
-            
-            stats['daily_breakdown'][current_date.strftime('%Y-%m-%d')] = {
-                'count': day_emotions.count(),
-                'average_degree': day_emotions.aggregate(Avg('emotion_degree'))['emotion_degree__avg'] or 0
-            }
-            
-            # Tendances par jour
-            day_emotion_counts = day_emotions.values('emotion_type__emotion_type').annotate(
-                count=Count('emotion_type__emotion_type')
-            )
-            
-            stats['daily_trends'][current_date.strftime('%Y-%m-%d')] = {
-                emotion['emotion_type__emotion_type']: emotion['count']
-                for emotion in day_emotion_counts
-            }
-            
-            current_date += timezone.timedelta(days=1)
-        
-        # Distribution globale des émotions
-        emotion_counts = weekly_emotions.values('emotion_type__emotion_type').annotate(
-            count=Count('emotion_type__emotion_type')
-        )
-        stats['emotion_distribution'] = {
-            emotion['emotion_type__emotion_type']: emotion['count']
-            for emotion in emotion_counts
-        }
-        
-        # Moyenne globale
-        avg_degree = weekly_emotions.aggregate(Avg('emotion_degree'))['emotion_degree__avg']
-        stats['average_emotion_degree'] = round(avg_degree if avg_degree else 0, 2)
-        
-        # Évolution des émotions
-        daily_averages = weekly_emotions.values('date').annotate(
-            avg_degree=Avg('emotion_degree')
-        ).order_by('date')
-        
-        stats['emotion_evolution'] = [
-            {
-                'date': entry['date'].strftime('%Y-%m-%d'),
-                'average_degree': round(entry['avg_degree'] if entry['avg_degree'] else 0, 2)
-            }
-            for entry in daily_averages
-        ]
-        
-        return stats
-
-    def _get_month_date_range(self):
-        """Retourne le début et la fin du mois en cours"""
-        today = timezone.now().date()
-        start_of_month = today.replace(day=1)
-        next_month = start_of_month + timezone.timedelta(days=32)
-        end_of_month = next_month.replace(day=1) - timezone.timedelta(days=1)
-        return start_of_month, end_of_month
-
-    def _calculate_monthly_base_stats(self, monthly_emotions):
-        """
-        Calcule les statistiques de base pour le mois
-        """
-        stats = {
-            'total_emotions': monthly_emotions.count(),
-            'weekly_breakdown': {},
-            'emotion_distribution': {},
-            'average_emotion_degree': 0,
-            'participation_rate': 0,
-            'weekly_trends': {},
-            'emotion_evolution': [],
-            'peak_days': {
-                'highest': None,
-                'lowest': None
-            }
-        }
-        
-        # Distribution par semaine
-        weekly_stats = monthly_emotions.annotate(
-            week=ExtractWeek('date')
-        ).values('week').annotate(
-            count=Count('id'),
-            avg_degree=Avg('emotion_degree')
-        ).order_by('week')
-        
-        for week_stat in weekly_stats:
-            stats['weekly_breakdown'][f"Week-{week_stat['week']}"] = {
-                'count': week_stat['count'],
-                'average_degree': round(week_stat['avg_degree'] if week_stat['avg_degree'] else 0, 2)
-            }
-        
-        # Distribution globale des émotions
-        emotion_counts = monthly_emotions.values('emotion_type__emotion_type').annotate(
-            count=Count('emotion_type__emotion_type')
-        )
-        stats['emotion_distribution'] = {
-            emotion['emotion_type__emotion_type']: emotion['count']
-            for emotion in emotion_counts
-        }
-        
-        # Moyenne globale
-        avg_degree = monthly_emotions.aggregate(Avg('emotion_degree'))['emotion_degree__avg']
-        stats['average_emotion_degree'] = round(avg_degree if avg_degree else 0, 2)
-        
-        # Évolution quotidienne des émotions
-        daily_stats = monthly_emotions.values('date').annotate(
-            count=Count('id'),
-            avg_degree=Avg('emotion_degree')
-        ).order_by('date')
-        
-        stats['emotion_evolution'] = [
-            {
-                'date': entry['date'].strftime('%Y-%m-%d'),
-                'count': entry['count'],
-                'average_degree': round(entry['avg_degree'] if entry['avg_degree'] else 0, 2)
-            }
-            for entry in daily_stats
-        ]
-        
-        # Identifier les pics
-        if daily_stats:
-            highest = max(daily_stats, key=lambda x: x['avg_degree'] or 0)
-            lowest = min(daily_stats, key=lambda x: x['avg_degree'] or 0)
-            
-            stats['peak_days'] = {
-                'highest': {
-                    'date': highest['date'].strftime('%Y-%m-%d'),
-                    'degree': round(highest['avg_degree'] if highest['avg_degree'] else 0, 2)
-                },
-                'lowest': {
-                    'date': lowest['date'].strftime('%Y-%m-%d'),
-                    'degree': round(lowest['avg_degree'] if lowest['avg_degree'] else 0, 2)
-                }
-            }
-        
-        return stats
